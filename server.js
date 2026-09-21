@@ -94,11 +94,13 @@ wss.on('connection', (twilioWs) => {
 
   (async () => {
     try {
+      await new Promise(resolve => setTimeout(resolve, 500));
       isSpeaking = true;
       const greeting = `Thanks for calling ${process.env.BUSINESS_NAME || 'us'}! How can I help you today?`;
       messageHistory.push({ role: 'assistant', content: greeting });
       const audioBuffer = await textToSpeechUlaw(greeting);
       sendAudioToTwilio(twilioWs, streamSid, audioBuffer);
+      console.log('Greeting sent successfully, bytes:', audioBuffer.length);
     } catch (err) {
       console.error('Error playing greeting:', err);
     } finally {
