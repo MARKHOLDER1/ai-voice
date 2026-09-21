@@ -88,10 +88,24 @@ wss.on('connection', (twilioWs) => {
     const msg = JSON.parse(message);
 
     switch (msg.event) {
-      case 'start':
-        streamSid = msg.start.streamSid;
-        console.log('Stream started:', streamSid);
-        break;
+   case 'start':
+  streamSid = msg.start.streamSid;
+  console.log('Stream started:', streamSid);
+
+  (async () => {
+    try {
+      isSpeaking = true;
+      const greeting = `Thanks for calling ${process.env.BUSINESS_NAME || 'us'}! How can I help you today?`;
+      messageHistory.push({ role: 'assistant', content: greeting });
+      const audioBuffer = await textToSpeechUlaw(greeting);
+      sendAudioToTwilio(twilioWs, streamSid, audioBuffer);
+    } catch (err) {
+      console.error('Error playing greeting:', err);
+    } finally {
+      isSpeaking = false;
+    }
+  })();
+  break;
 
       case 'media':
         // Forward the caller's audio chunk to Deepgram for transcription
