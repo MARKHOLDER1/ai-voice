@@ -32,8 +32,11 @@ app.post('/voice', twilio.webhook(process.env.TWILIO_AUTH_TOKEN, { protocol: 'ht
   const twiml = new twilio.twiml.VoiceResponse();
   const connect = twiml.connect();
   const stream = connect.stream({
-    url: `${process.env.PUBLIC_SERVER_URL.replace(/^http/, 'ws')}/media-stream?token=${process.env.STREAM_SECRET}`
+    url: `${process.env.PUBLIC_SERVER_URL.replace(/^http/, 'ws')}/media-stream`
   });
+  // Twilio strips query strings from the stream URL, so the shared secret
+  // travels as a custom parameter instead and is checked on the 'start' event.
+  stream.parameter({ name: 'token', value: process.env.STREAM_SECRET || '' });
   // Pass the caller's number through to the media stream so we can include
   // it in the transcript email later.
   stream.parameter({ name: 'callerNumber', value: req.body.From || '' });
@@ -46,20 +49,10 @@ app.get('/', (req, res) => {
 });
 
 // --- 2. Handle the live audio stream for each call ---
-wss.on('connection', (twilioWs, req) => {
-  // Reject any connection that doesn't present the shared secret — this stops
-  // strangers who guess/find this URL from opening a stream and running up
-  // your Deepgram/Claude/ElevenLabs bill without ever placing a real call.
-  const url = new URL(req.url, 'http://localhost');
-  const token = url.searchParams.get('token');
-  if (token !== process.env.STREAM_SECRET) {
-    console.warn('Rejected media stream connection with invalid/missing token');
-    twilioWs.close();
-    return;
-  }
-
+wss.on('connection', (twilioWs) => {
   console.log('Twilio media stream connected');
 
+  let authenticated = false; // becomes true only after the secret is verified on 'start'
   let streamSid = null;
   let callSid = null;
   let callerNumber = null;
@@ -114,6 +107,16 @@ wss.on('connection', (twilioWs, req) => {
 
     switch (msg.event) {
       case 'start':
+        // Verify the shared secret before doing anything else. Anyone who finds
+        // this URL and opens a stream without it gets disconnected immediately,
+        // so they can't run up your Deepgram/Claude/ElevenLabs bill.
+        if (!process.env.STREAM_SECRET || msg.start.customParameters?.token !== process.env.STREAM_SECRET) {
+          console.warn('Rejected media stream: invalid/missing token');
+          deepgramLive.finish();
+          twilioWs.close();
+          break;
+        }
+        authenticated = true;
         streamSid = msg.start.streamSid;
         callSid = msg.start.callSid;
         callerNumber = msg.start.customParameters?.callerNumber || null;
@@ -141,7 +144,7 @@ wss.on('connection', (twilioWs, req) => {
 
       case 'media':
         // Forward the caller's audio chunk to Deepgram for transcription
-        if (deepgramLive.getReadyState() === 1) {
+        if (authenticated && deepgramLive.getReadyState() === 1) {
           const audioChunk = Buffer.from(msg.media.payload, 'base64');
           deepgramLive.send(audioChunk);
         }
