@@ -8,6 +8,7 @@ const { createClient, LiveTranscriptionEvents } = require('@deepgram/sdk');
 const { getAssistantReply } = require('./lib/claudeAgent');
 const { textToSpeechUlaw } = require('./lib/elevenLabsTTS');
 const { sendTranscriptEmail } = require('./lib/emailTranscript');
+const { getGreeting } = require('./lib/content');
 
 const app = express();
 const server = http.createServer(app);
@@ -85,7 +86,7 @@ wss.on('connection', (twilioWs) => {
 
     try {
       isSpeaking = true;
-      const replyText = await getAssistantReply(messageHistory, { callSid });
+      const replyText = await getAssistantReply(messageHistory, { callSid, callerNumber });
       console.log('Assistant reply:', replyText);
 
       const audioBuffer = await textToSpeechUlaw(replyText);
@@ -129,7 +130,9 @@ wss.on('connection', (twilioWs) => {
           try {
             await new Promise(resolve => setTimeout(resolve, 500));
             isSpeaking = true;
-            const greeting = `Thanks for calling ${process.env.BUSINESS_NAME || 'us'}! How can I help you today?`;
+            const greeting =
+              getGreeting() ||
+              `Thanks for calling ${process.env.BUSINESS_NAME || 'us'}! How can I help you today?`;
             messageHistory.push({ role: 'assistant', content: greeting });
             const audioBuffer = await textToSpeechUlaw(greeting);
             sendAudioToTwilio(twilioWs, streamSid, audioBuffer);
