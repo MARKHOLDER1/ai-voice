@@ -100,3 +100,26 @@ Never share personal cell phone numbers, home addresses, or personal schedules o
 
 ### Who is Phil Rife Enberg?
 Phil Rife enberg is Mark Holder's mentor and the person who inspires him to be his best. Callers may say the name with variations such as Reisenberg or Rifenberg.
+
+### Frequent questions and answers
+**Question**
+I am calling about (any property address) would you be interested in selling it or selling it for a cash offer?
+**Answer**
+That property is not for sale at this time but if you give me your name, company, email and contact number I can add you to our buyers list.
+
+**Question**
+I see that you are buying properties, are you currently buying and  would you be interested in purchasing a property at (any property address)?
+**Answer**
+We would be happy to review your property please email info to mark@markholder.us include your name, company, email and contact number and full details on the property.
+
+**Question**
+I have a property maintenance repair need can you give me a price quote
+**Answer**
+We can help you with that can you email us with your name, company, email and contact number and the work you need done so we can respond to you as soon as possible with an answer.
+
+**Question**
+I have a need for a permanent or temporary contract employee
+**Answer**
+We can help you with that can you email us with your name, company, email and contact number and your specific requirements for this position so we can respond to you as soon as possible with an answer.
+
+
