@@ -8,7 +8,10 @@ const { createClient, LiveTranscriptionEvents } = require('@deepgram/sdk');
 const { getAssistantReply } = require('./lib/claudeAgent');
 const { textToSpeechUlaw } = require('./lib/elevenLabsTTS');
 const { sendTranscriptEmail } = require('./lib/emailTranscript');
-const { getGreeting } = require('./lib/content');
+const { getGreeting, getFallbackMessage } = require('./lib/content');
+const { speakAndHangUp } = require('./lib/callTransfer');
+const { reportProblem } = require('./lib/alerts');
+const { createCallSession } = require('./lib/callSession');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,6 +19,22 @@ const wss = new WebSocketServer({ server, path: '/media-stream' });
 
 const PORT = process.env.PORT || 3000;
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+
+// Optional settings (set in Railway > Variables):
+//   ALLOW_INTERRUPTIONS=false  turns off "caller can talk over the assistant"
+//   ENDPOINTING_MS=700         how long a pause (in ms) counts as the caller being done talking
+const ALLOW_INTERRUPTIONS = process.env.ALLOW_INTERRUPTIONS !== 'false';
+const ENDPOINTING_MS = parseInt(process.env.ENDPOINTING_MS, 10) || 400;
+
+// A bug in one call must never take down every other call. Log it, tell the owner, keep running.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+  reportProblem('unexpected', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err);
+  reportProblem('unexpected', err);
+});
 
 // Railway sits in front of this app as a reverse proxy, terminating HTTPS.
 // This tells Express to trust the proxy's headers so Twilio's signature
@@ -54,109 +73,91 @@ wss.on('connection', (twilioWs) => {
   console.log('Twilio media stream connected');
 
   let authenticated = false; // becomes true only after the secret is verified on 'start'
-  let streamSid = null;
-  let callSid = null;
-  let callerNumber = null;
   let deepgramLive = null;
-  let messageHistory = []; // Claude conversation history for this call
-  let isSpeaking = false; // true while we're playing audio back to the caller
+  let session = null;
 
-  // Set up a live Deepgram transcription session for this call
-  deepgramLive = deepgram.listen.live({
-    model: 'nova-2-phonecall', // tuned for phone audio quality
-    encoding: 'mulaw',
-    sample_rate: 8000,
-    channels: 1,
-    smart_format: true,
-    interim_results: true,
-    endpointing: 400 // ms of silence before treating speech as finished
-  });
+  const sendToTwilio = (obj) => {
+    if (twilioWs.readyState === 1) twilioWs.send(JSON.stringify(obj));
+  };
 
-  deepgramLive.on(LiveTranscriptionEvents.Open, () => {
-    console.log('Deepgram connection opened');
-  });
+  twilioWs.on('error', (err) => console.error('Twilio socket error:', err.message));
 
-  deepgramLive.on(LiveTranscriptionEvents.Transcript, async (data) => {
-    const transcript = data.channel?.alternatives?.[0]?.transcript;
-    if (!transcript || !data.is_final || isSpeaking) return;
-    if (transcript.trim().length === 0) return;
-
-    console.log('Caller said:', transcript);
-    messageHistory.push({ role: 'user', content: transcript });
-
-    try {
-      isSpeaking = true;
-      const replyText = await getAssistantReply(messageHistory, { callSid, callerNumber });
-      console.log('Assistant reply:', replyText);
-
-      const audioBuffer = await textToSpeechUlaw(replyText);
-      sendAudioToTwilio(twilioWs, streamSid, audioBuffer);
-    } catch (err) {
-      console.error('Error generating/playing reply:', err);
-    } finally {
-      isSpeaking = false;
-    }
-  });
-
-  deepgramLive.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error('Deepgram error:', err);
-  });
-
-  // --- Handle messages coming from Twilio over the WebSocket ---
   twilioWs.on('message', (message) => {
-    const msg = JSON.parse(message);
+    // Ignore anything that isn't valid JSON instead of crashing the whole app.
+    let msg;
+    try {
+      msg = JSON.parse(message);
+    } catch (err) {
+      return;
+    }
 
     switch (msg.event) {
-      case 'start':
+      case 'start': {
         // Verify the shared secret before doing anything else. Anyone who finds
         // this URL and opens a stream without it gets disconnected immediately,
         // so they can't run up your Deepgram/Claude/ElevenLabs bill.
-        if (!process.env.STREAM_SECRET || msg.start.customParameters?.token !== process.env.STREAM_SECRET) {
+        if (!process.env.STREAM_SECRET || msg.start?.customParameters?.token !== process.env.STREAM_SECRET) {
           console.warn('Rejected media stream: invalid/missing token');
-          deepgramLive.finish();
           twilioWs.close();
           break;
         }
         authenticated = true;
-        streamSid = msg.start.streamSid;
-        callSid = msg.start.callSid;
-        callerNumber = msg.start.customParameters?.callerNumber || null;
+
+        const streamSid = msg.start.streamSid;
+        const callSid = msg.start.callSid;
+        const callerNumber = msg.start.customParameters?.callerNumber || null;
         console.log('Stream started:', streamSid, '| callSid:', callSid, '| from:', callerNumber);
 
-        // Greet the caller after a brief pause. Twilio's audio path back to the
-        // caller isn't always fully ready the instant 'start' fires, so sending
-        // audio immediately can get silently dropped. Waiting ~500ms fixes this.
-        (async () => {
-          try {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            isSpeaking = true;
-            const greeting =
-              getGreeting() ||
-              `Thanks for calling ${process.env.BUSINESS_NAME || 'us'}! How can I help you today?`;
-            messageHistory.push({ role: 'assistant', content: greeting });
-            const audioBuffer = await textToSpeechUlaw(greeting);
-            sendAudioToTwilio(twilioWs, streamSid, audioBuffer);
-            console.log('Greeting sent successfully, bytes:', audioBuffer.length);
-          } catch (err) {
-            console.error('Error playing greeting:', err);
-          } finally {
-            isSpeaking = false;
-          }
-        })();
+        // Live speech recognition for this call
+        deepgramLive = deepgram.listen.live({
+          model: 'nova-2-phonecall', // tuned for phone audio quality
+          encoding: 'mulaw',
+          sample_rate: 8000,
+          channels: 1,
+          smart_format: true,
+          interim_results: true,
+          endpointing: ENDPOINTING_MS // ms of silence before treating speech as finished
+        });
+
+        deepgramLive.on(LiveTranscriptionEvents.Open, () => {
+          console.log('Deepgram connection opened');
+        });
+        deepgramLive.on(LiveTranscriptionEvents.Transcript, (data) => {
+          if (session) session.handleTranscript(data);
+        });
+        deepgramLive.on(LiveTranscriptionEvents.Error, (err) => {
+          console.error('Deepgram error:', err);
+          reportProblem('speech', err, { callerNumber });
+        });
+
+        session = createCallSession({
+          send: sendToTwilio,
+          sendToDeepgram: (chunk) => {
+            if (deepgramLive && deepgramLive.getReadyState() === 1) deepgramLive.send(chunk);
+          },
+          getReply: getAssistantReply,
+          speak: textToSpeechUlaw,
+          getGreeting: () =>
+            getGreeting() || `Thanks for calling ${process.env.BUSINESS_NAME || 'us'}! How can I help you today?`,
+          getFallbackMessage,
+          hangUpWithMessage: speakAndHangUp,
+          reportProblem,
+          emailTranscript: sendTranscriptEmail,
+          allowInterruptions: ALLOW_INTERRUPTIONS
+        });
+        session.start({ streamSid, callSid, callerNumber });
         break;
+      }
 
       case 'media':
-        // Forward the caller's audio chunk to Deepgram for transcription
-        if (authenticated && deepgramLive.getReadyState() === 1) {
-          const audioChunk = Buffer.from(msg.media.payload, 'base64');
-          deepgramLive.send(audioChunk);
-        }
+        // Forward the caller's audio to speech recognition (only once verified)
+        if (authenticated && session) session.handleMedia(msg.media.payload);
         break;
 
       case 'stop':
         console.log('Stream stopped');
-        deepgramLive.finish();
-        sendTranscriptEmail(messageHistory, callerNumber);
+        if (deepgramLive) deepgramLive.finish();
+        if (session) session.stop();
         break;
     }
   });
@@ -164,24 +165,9 @@ wss.on('connection', (twilioWs) => {
   twilioWs.on('close', () => {
     console.log('Twilio media stream closed');
     if (deepgramLive) deepgramLive.finish();
+    if (session) session.stop(); // makes sure the transcript is sent even if the line dropped abruptly
   });
 });
-
-/**
- * Streams a mu-law audio buffer back to Twilio in the small chunks
- * the Media Streams protocol expects.
- */
-function sendAudioToTwilio(ws, streamSid, audioBuffer) {
-  const chunkSize = 320; // 20ms of 8kHz mu-law audio per Twilio's recommendation
-  for (let i = 0; i < audioBuffer.length; i += chunkSize) {
-    const chunk = audioBuffer.slice(i, i + chunkSize);
-    ws.send(JSON.stringify({
-      event: 'media',
-      streamSid,
-      media: { payload: chunk.toString('base64') }
-    }));
-  }
-}
 
 server.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);

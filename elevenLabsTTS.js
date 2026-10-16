@@ -26,7 +26,8 @@ async function textToSpeechUlaw(text) {
         'xi-api-key': API_KEY,
         'Content-Type': 'application/json'
       },
-      responseType: 'arraybuffer'
+      responseType: 'arraybuffer',
+      timeout: 15000 // don't leave the caller in silence if the voice service stalls
     }
   );
 
