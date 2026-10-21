@@ -123,7 +123,7 @@ I have a property maintenance repair need can you give me a price quote
 We can help you with that can you email us with your name, company, email and contact number and the work you need done so we can respond to you as soon as possible with an answer.
 
 **Question**
-I have a need for a permanent or temporary contract employee
+I have a need for a permanent or temporary contract employee, can you provide someone for me?
 **Answer**
 We can help you with that can you email us with your name, company, email and contact number and your specific requirements for this position so we can respond to you as soon as possible with an answer.
 
