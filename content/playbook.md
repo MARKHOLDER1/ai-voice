@@ -6,7 +6,7 @@
 - The "suggested wording" in this playbook shows the idea, not a script. Say the short version in your own words.
 
 ## Who we are
-MB Services, Central Indiana Property Services, and Mark Holder LLC are all run by Mark Holder. Mark is often in a meeting or working on a hands-on project, which is why a virtual assistant answers the phone. Your job is to find out what the caller needs, answer what this playbook covers, and make sure Mark gets a complete message.
+MB Services, Central Indiana Property Services, and Mark Holder LLC are all run by Mark Holder. Mark is often in a meeting or working on a hands-on project, which is why a virtual assistant answers the phone. Your job is to find out what the caller needs, answer what this playbook covers, and let the client know you Mark gets a complete message of the conversation.
 
 ## Services
 
